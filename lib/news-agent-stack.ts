@@ -10,65 +10,67 @@ export class NewsAgentStack extends cdk.Stack {
     super(scope, id, props);
 
     // Create Lambda function
-    const helloWorldLambda = new lambda.Function(this, 'HelloWorldFunction', {
+    const newsAgentLambda = new lambda.Function(this, 'NewsAgentFunction', {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'hello-world.handler',
-      code: lambda.Code.fromAsset('lambda'),
-      functionName: 'news-agent-hello-world',
-      description: 'Hello World Lambda function for NewsAgent',
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 128,
+      code: lambda.Code.fromAsset('lambda-package'),
+      functionName: 'news-agent',
+      description: 'NewsAgent Lambda function that reads Hacker News and summarizes articles',
+      timeout: cdk.Duration.minutes(10), // Increased timeout for web scraping
+      memorySize: 512, // Increased memory for processing multiple articles
       environment: {
         NODE_ENV: 'production',
-        LOG_LEVEL: 'info'
+        LOG_LEVEL: 'info',
+        USER_AGENT: 'Mozilla/5.0 (compatible; NewsAgent/1.0; +https://github.com/JKevinXu/NewsAgent)'
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
-    // Create EventBridge rule for cron job (runs every 5 minutes)
-    const cronRule = new events.Rule(this, 'HelloWorldCronRule', {
-      ruleName: 'news-agent-hello-world-cron',
-      description: 'Triggers HelloWorld Lambda every 5 minutes',
-      schedule: events.Schedule.expression('rate(5 minutes)'), // Run every 5 minutes
+    // Create EventBridge rule for cron job (runs every 30 minutes)
+    const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
+      ruleName: 'news-agent-cron',
+      description: 'Triggers NewsAgent Lambda every 30 minutes to fetch and summarize Hacker News',
+      schedule: events.Schedule.expression('rate(30 minutes)'), // Run every 30 minutes (less frequent due to processing time)
       enabled: true,
     });
 
     // Add Lambda function as target for the cron rule
-    cronRule.addTarget(new targets.LambdaFunction(helloWorldLambda, {
+    cronRule.addTarget(new targets.LambdaFunction(newsAgentLambda, {
       event: events.RuleTargetInput.fromObject({
         source: 'aws.events',
-        'detail-type': 'Scheduled Event',
+        'detail-type': 'Scheduled News Agent',
         detail: {
-          message: 'Hello from scheduled cron job!',
-          timestamp: events.EventField.fromPath('$.time')
+          message: 'Scheduled NewsAgent execution to fetch and summarize Hacker News',
+          timestamp: events.EventField.fromPath('$.time'),
+          action: 'fetch-summarize-news'
         }
       })
     }));
 
     // Output the Lambda function ARN and name
     new cdk.CfnOutput(this, 'LambdaFunctionArn', {
-      value: helloWorldLambda.functionArn,
-      description: 'ARN of the Hello World Lambda function',
-      exportName: 'NewsAgent-HelloWorld-Lambda-Arn'
+      value: newsAgentLambda.functionArn,
+      description: 'ARN of the NewsAgent Lambda function',
+      exportName: 'NewsAgent-Lambda-Arn'
     });
 
     new cdk.CfnOutput(this, 'LambdaFunctionName', {
-      value: helloWorldLambda.functionName,
-      description: 'Name of the Hello World Lambda function',
-      exportName: 'NewsAgent-HelloWorld-Lambda-Name'
+      value: newsAgentLambda.functionName,
+      description: 'Name of the NewsAgent Lambda function',
+      exportName: 'NewsAgent-Lambda-Name'
     });
 
     // Output the EventBridge rule ARN
     new cdk.CfnOutput(this, 'CronRuleArn', {
       value: cronRule.ruleArn,
-      description: 'ARN of the EventBridge cron rule',
+      description: 'ARN of the NewsAgent EventBridge cron rule',
       exportName: 'NewsAgent-CronRule-Arn'
     });
 
     // Output the cron schedule
     new cdk.CfnOutput(this, 'CronSchedule', {
-      value: 'rate(5 minutes)',
-      description: 'Schedule expression for the cron job',
+      value: 'rate(30 minutes)',
+      description: 'Schedule expression for the NewsAgent cron job',
       exportName: 'NewsAgent-CronSchedule'
     });
   }
