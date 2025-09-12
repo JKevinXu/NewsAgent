@@ -3,6 +3,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export class NewsAgentStack extends cdk.Stack {
@@ -21,10 +22,21 @@ export class NewsAgentStack extends cdk.Stack {
       environment: {
         NODE_ENV: 'production',
         LOG_LEVEL: 'info',
-        USER_AGENT: 'Mozilla/5.0 (compatible; NewsAgent/1.0; +https://github.com/JKevinXu/NewsAgent)'
+        USER_AGENT: 'Mozilla/5.0 (compatible; NewsAgent/1.0; +https://github.com/JKevinXu/NewsAgent)',
+        SES_FROM_EMAIL: 'xkevinj@gmail.com' // Using your Gmail as sender for verification
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
+
+    // Add SES permissions to the Lambda function
+    newsAgentLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ses:SendEmail',
+        'ses:SendRawEmail'
+      ],
+      resources: ['*'], // You can restrict this to specific verified email addresses
+    }));
 
     // Create EventBridge rule for cron job (runs every 30 minutes)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
