@@ -1,6 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import * as https from 'https';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 
 interface HackerNewsItem {
   id: number;
@@ -19,6 +20,7 @@ interface StoryInfo {
   author: string;
   comments: number;
   timestamp: string;
+  summary?: string;
 }
 
 export const handler = async (
@@ -37,14 +39,17 @@ export const handler = async (
     
     console.log(`📊 Found ${topStories.length} top stories`);
     
-    // Process each story to get basic info
+    // Process each story to get basic info and summaries
     const stories: StoryInfo[] = [];
     
     for (const story of topStories) {
       try {
-        const storyInfo = processStory(story);
+        const storyInfo = await processStoryWithSummary(story);
         stories.push(storyInfo);
         console.log(`✅ Processed: "${storyInfo.title}" (${storyInfo.score} points, ${storyInfo.comments} comments)`);
+        if (storyInfo.summary) {
+          console.log(`📝 Summary: ${storyInfo.summary}`);
+        }
       } catch (error) {
         console.log(`❌ Failed to process story: ${story.title}`, error);
       }
@@ -60,6 +65,9 @@ export const handler = async (
       console.log(`${index + 1}. 📰 ${story.title}`);
       console.log(`   👤 Author: ${story.author} | ⭐ Score: ${story.score} points | 💬 ${story.comments} comments`);
       console.log(`   🔗 URL: ${story.url}`);
+      if (story.summary) {
+        console.log(`   📝 Summary: ${story.summary}`);
+      }
       console.log('');
     });
 
@@ -203,8 +211,8 @@ async function getTopHackerNewsStories(limit: number = 5): Promise<HackerNewsIte
   }
 }
 
-function processStory(story: HackerNewsItem): StoryInfo {
-  return {
+async function processStoryWithSummary(story: HackerNewsItem): Promise<StoryInfo> {
+  const basicInfo: StoryInfo = {
     title: story.title,
     url: story.url || 'No URL available',
     score: story.score,
@@ -212,6 +220,87 @@ function processStory(story: HackerNewsItem): StoryInfo {
     comments: story.descendants || 0,
     timestamp: new Date(story.time * 1000).toISOString()
   };
+
+  // Try to fetch and summarize article content
+  if (story.url && story.url !== 'No URL available') {
+    try {
+      const articleContent = await fetchArticleContent(story.url);
+      if (articleContent && articleContent !== 'Unable to fetch article content') {
+        const summary = await summarizeWithBedrock(story.title, articleContent);
+        basicInfo.summary = summary;
+      }
+    } catch (error) {
+      console.error(`Failed to summarize article: ${story.title}`, error);
+      // Continue without summary rather than failing completely
+    }
+  }
+
+  return basicInfo;
+}
+
+async function fetchArticleContent(url: string): Promise<string> {
+  try {
+    console.log(`📖 Fetching article content from: ${url}`);
+    const content = await httpGet(url);
+    
+    // Simple text extraction - remove HTML tags and extract meaningful content
+    const textContent = content
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Remove scripts
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '') // Remove styles
+      .replace(/<[^>]*>/g, ' ') // Remove HTML tags
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
+
+    // Take first 4000 characters to avoid token limits
+    const truncatedContent = textContent.length > 4000 ? textContent.substring(0, 4000) + '...' : textContent;
+    
+    return truncatedContent;
+  } catch (error) {
+    console.error(`❌ Failed to fetch article content from ${url}:`, error);
+    return 'Unable to fetch article content';
+  }
+}
+
+async function summarizeWithBedrock(title: string, content: string): Promise<string> {
+  try {
+    console.log(`🤖 Generating summary for: ${title}`);
+    
+    const bedrockClient = new BedrockRuntimeClient({ 
+      region: process.env.AWS_REGION || 'us-west-2' 
+    });
+
+    const prompt = `Human: Please provide a concise 2-3 sentence summary of this article titled "${title}". Focus on the main points and key takeaways.
+
+Article content:
+${content}
+
+Assistant:`;
+
+    const body = {
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: 1000,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    };
+
+    const command = new InvokeModelCommand({
+      modelId: "anthropic.claude-3-sonnet-20240229-v1:0",
+      contentType: "application/json",
+      body: JSON.stringify(body)
+    });
+
+    const response = await bedrockClient.send(command);
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    
+    return responseBody.content[0].text.trim();
+  } catch (error) {
+    console.error(`❌ Failed to summarize with Bedrock:`, error);
+    return 'Summary unavailable';
+  }
 }
 
 async function sendEmailSummary(stories: StoryInfo[], timestamp: string): Promise<void> {
@@ -275,7 +364,18 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         </p>
         <p style="margin: 5px 0; color: #888; font-size: 12px;">
           🕐 Posted: ${new Date(story.timestamp).toLocaleString()}
-        </p>
+        </p>`;
+    
+    if (story.summary) {
+      storiesHTML += `
+        <div style="margin-top: 10px; padding: 10px; background-color: #fff; border-radius: 4px; border-left: 2px solid #ff6600;">
+          <p style="margin: 0; color: #444; font-size: 13px; font-style: italic;">
+            📝 <strong>Summary:</strong> ${story.summary}
+          </p>
+        </div>`;
+    }
+    
+    storiesHTML += `
       </div>
     `;
   });
@@ -290,7 +390,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="text-align: center; margin-bottom: 30px; padding: 20px; background-color: #ff6600; color: white; border-radius: 8px;">
             <h1 style="margin: 0;">📰 Hacker News Summary</h1>
-            <p style="margin: 10px 0 0 0;">Generated by NewsAgent</p>
+            <p style="margin: 10px 0 0 0;">Generated by NewsAgent with AI Summaries</p>
             <p style="margin: 5px 0 0 0; font-size: 14px;">${date}</p>
         </div>
         
@@ -301,7 +401,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         
         <div style="text-align: center; margin-top: 30px; padding: 15px; background-color: #f0f0f0; border-radius: 6px; font-size: 12px; color: #666;">
             <p>This summary was automatically generated by your NewsAgent Lambda function.</p>
-            <p>🤖 Powered by AWS Lambda & Hacker News API</p>
+            <p>🤖 Powered by AWS Lambda, Bedrock & Hacker News API</p>
         </div>
     </body>
     </html>
@@ -325,22 +425,27 @@ function generateEmailText(stories: StoryInfo[], timestamp: string): string {
 ${index + 1}. ${story.title}
    Author: ${story.author} | Score: ${story.score} points | Comments: ${story.comments}
    URL: ${story.url}
-   Posted: ${new Date(story.timestamp).toLocaleString()}
+   Posted: ${new Date(story.timestamp).toLocaleString()}`;
+    
+    if (story.summary) {
+      storiesText += `
+   Summary: ${story.summary}`;
+    }
+    
+    storiesText += `
 
 `;
   });
 
   return `
 HACKER NEWS SUMMARY
-Generated by NewsAgent
+Generated by NewsAgent with AI Summaries
 ${date}
 
 Top ${stories.length} Stories:
 ${storiesText}
-
 ---
 This summary was automatically generated by your NewsAgent Lambda function.
-Powered by AWS Lambda & Hacker News API
+Powered by AWS Lambda, Bedrock & Hacker News API
   `;
 }
-

@@ -38,6 +38,15 @@ export class NewsAgentStack extends cdk.Stack {
       resources: ['*'], // You can restrict this to specific verified email addresses
     }));
 
+    // Add Bedrock permissions to the Lambda function
+    newsAgentLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeModel'
+      ],
+      resources: ['*'], // You can restrict this to specific Bedrock models
+    }));
+
     // Create EventBridge rule for cron job (runs every 30 minutes)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
       ruleName: 'news-agent-cron',

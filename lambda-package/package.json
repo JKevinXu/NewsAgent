@@ -11,6 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@aws-sdk/client-ses": "^3.887.0"
+    "@aws-sdk/client-ses": "^3.887.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.887.0"
   }
 }
