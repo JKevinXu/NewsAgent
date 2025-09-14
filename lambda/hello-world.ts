@@ -66,7 +66,7 @@ export const handler = async (
       console.log(`   👤 Author: ${story.author} | ⭐ Score: ${story.score} points | 💬 ${story.comments} comments`);
       console.log(`   🔗 URL: ${story.url}`);
       if (story.summary) {
-        console.log(`   📝 Summary: ${story.summary}`);
+        console.log(`   💡 Key Insights: ${story.summary}`);
       }
       console.log('');
     });
@@ -269,7 +269,15 @@ async function summarizeWithBedrock(title: string, content: string): Promise<str
       region: process.env.AWS_REGION || 'us-west-2' 
     });
 
-    const prompt = `Human: Please provide a concise 2-3 sentence summary of this article titled "${title}". Focus on the main points and key takeaways.
+    const prompt = `Human: Please analyze this article titled "${title}" and extract the most insightful, thought-provoking, or valuable pieces of information. Focus on:
+
+1. The most interesting insights, revelations, or unique perspectives
+2. Key technical details, methodologies, or approaches that stand out
+3. Surprising findings, counterintuitive points, or novel ideas
+4. Practical implications or actionable takeaways
+5. Any profound or enlightening observations
+
+Don't worry about being concise - provide a rich, detailed highlight of what makes this article worth reading. Think of this as extracting the "gems" that readers would find most valuable.
 
 Article content:
 ${content}
@@ -288,7 +296,7 @@ Assistant:`;
     };
 
     const command = new InvokeModelCommand({
-      modelId: "anthropic.claude-3-sonnet-20240229-v1:0",
+      modelId: "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
       contentType: "application/json",
       body: JSON.stringify(body)
     });
@@ -368,9 +376,10 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
     
     if (story.summary) {
       storiesHTML += `
-        <div style="margin-top: 10px; padding: 10px; background-color: #fff; border-radius: 4px; border-left: 2px solid #ff6600;">
-          <p style="margin: 0; color: #444; font-size: 13px; font-style: italic;">
-            📝 <strong>Summary:</strong> ${story.summary}
+        <div style="margin-top: 10px; padding: 15px; background-color: #fff; border-radius: 4px; border-left: 3px solid #ff6600; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          <p style="margin: 0; color: #444; font-size: 14px; line-height: 1.5;">
+            💡 <strong>Key Insights:</strong><br>
+            <span style="font-style: italic; margin-top: 5px; display: block;">${story.summary}</span>
           </p>
         </div>`;
     }
@@ -429,7 +438,7 @@ ${index + 1}. ${story.title}
     
     if (story.summary) {
       storiesText += `
-   Summary: ${story.summary}`;
+   Key Insights: ${story.summary}`;
     }
     
     storiesText += `
