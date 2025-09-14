@@ -47,11 +47,11 @@ export class NewsAgentStack extends cdk.Stack {
       resources: ['*'], // You can restrict this to specific Bedrock models
     }));
 
-    // Create EventBridge rule for cron job (runs every 30 minutes)
+    // Create EventBridge rule for cron job (runs daily at 6 AM UTC+8 / 10 PM UTC)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
       ruleName: 'news-agent-cron',
-      description: 'Triggers NewsAgent Lambda every 30 minutes to fetch and summarize Hacker News',
-      schedule: events.Schedule.expression('rate(30 minutes)'), // Run every 30 minutes (less frequent due to processing time)
+      description: 'Triggers NewsAgent Lambda daily at 6 AM UTC+8 (10 PM UTC) to fetch and summarize Hacker News',
+      schedule: events.Schedule.expression('cron(0 22 * * ? *)'), // Daily at 10 PM UTC (6 AM UTC+8)
       enabled: true,
     });
 
@@ -90,8 +90,8 @@ export class NewsAgentStack extends cdk.Stack {
 
     // Output the cron schedule
     new cdk.CfnOutput(this, 'CronSchedule', {
-      value: 'rate(30 minutes)',
-      description: 'Schedule expression for the NewsAgent cron job',
+      value: 'cron(0 22 * * ? *)',
+      description: 'Schedule expression for the NewsAgent cron job (Daily at 6 AM UTC+8)',
       exportName: 'NewsAgent-CronSchedule'
     });
   }
