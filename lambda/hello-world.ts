@@ -269,15 +269,12 @@ async function summarizeWithBedrock(title: string, content: string): Promise<str
       region: process.env.AWS_REGION || 'us-west-2' 
     });
 
-    const prompt = `Human: Please analyze this article titled "${title}" and extract the most insightful, thought-provoking, or valuable pieces of information. Focus on:
+    const prompt = `Human: Please analyze this article titled "${title}" and provide exactly 2 parts:
 
-1. The most interesting insights, revelations, or unique perspectives
-2. Key technical details, methodologies, or approaches that stand out
-3. Surprising findings, counterintuitive points, or novel ideas
-4. Practical implications or actionable takeaways
-5. Any profound or enlightening observations
+1. **Summary**: A concise overview of what the article is about and its main points
+2. **Key Insight**: The single most interesting, surprising, or valuable takeaway that makes this article worth reading
 
-Don't worry about being concise - provide a rich, detailed highlight of what makes this article worth reading. Think of this as extracting the "gems" that readers would find most valuable.
+Keep both parts brief and focused.
 
 Article content:
 ${content}
@@ -375,12 +372,25 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         </p>`;
     
     if (story.summary) {
+      // Convert markdown to HTML for better rendering
+      const htmlSummary = story.summary
+        .replace(/# (.*)/g, '<h3 style="color: #ff6600; margin: 15px 0 10px 0; font-size: 16px;">$1</h3>')
+        .replace(/## (.*)/g, '<h4 style="color: #333; margin: 12px 0 8px 0; font-size: 15px; font-weight: bold;">$1</h4>')
+        .replace(/### (.*)/g, '<h5 style="color: #555; margin: 10px 0 6px 0; font-size: 14px; font-weight: bold;">$1</h5>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/^\d+\. (.*)/gm, '<div style="margin: 8px 0; padding-left: 15px;"><strong>• $1</strong></div>')
+        .replace(/\n\n/g, '</p><p style="margin: 8px 0; line-height: 1.6;">')
+        .replace(/\n/g, '<br>');
+      
       storiesHTML += `
-        <div style="margin-top: 10px; padding: 15px; background-color: #fff; border-radius: 4px; border-left: 3px solid #ff6600; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-          <p style="margin: 0; color: #444; font-size: 14px; line-height: 1.5;">
-            💡 <strong>Key Insights:</strong><br>
-            <span style="font-style: italic; margin-top: 5px; display: block;">${story.summary}</span>
-          </p>
+        <div style="margin-top: 15px; padding: 20px; background-color: #fff; border-radius: 6px; border-left: 4px solid #ff6600; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="margin-bottom: 10px;">
+            <span style="font-size: 16px; font-weight: bold; color: #ff6600;">💡 Key Insights</span>
+          </div>
+          <div style="color: #444; font-size: 14px; line-height: 1.6;">
+            <p style="margin: 8px 0; line-height: 1.6;">${htmlSummary}</p>
+          </div>
         </div>`;
     }
     
@@ -437,8 +447,19 @@ ${index + 1}. ${story.title}
    Posted: ${new Date(story.timestamp).toLocaleString()}`;
     
     if (story.summary) {
+      // Clean up markdown for plain text email
+      const cleanSummary = story.summary
+        .replace(/# (.*)/g, '\n📋 $1\n' + '='.repeat(50))
+        .replace(/## (.*)/g, '\n🔍 $1\n' + '-'.repeat(30))
+        .replace(/### (.*)/g, '\n• $1')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/^\d+\. /gm, '   → ');
+      
       storiesText += `
-   Key Insights: ${story.summary}`;
+   
+💡 KEY INSIGHTS:
+${cleanSummary}`;
     }
     
     storiesText += `
