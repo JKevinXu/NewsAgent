@@ -269,12 +269,12 @@ async function summarizeWithBedrock(title: string, content: string): Promise<str
       region: process.env.AWS_REGION || 'us-west-2' 
     });
 
-    const prompt = `Human: Please analyze this article titled "${title}" and provide exactly 2 parts:
+    const prompt = `Human: Please analyze this article and provide exactly 2 parts:
 
 1. **Summary**: A concise overview of what the article is about and its main points
 2. **Key Insight**: The single most interesting, surprising, or valuable takeaway that makes this article worth reading
 
-Keep both parts brief and focused.
+Keep both parts brief and focused. Do not repeat the article title in your response.
 
 Article content:
 ${content}
@@ -385,9 +385,6 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
       
       storiesHTML += `
         <div style="margin-top: 15px; padding: 20px; background-color: #fff; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div style="margin-bottom: 10px;">
-            <span style="font-size: 16px; font-weight: bold; color: #ff6600;">💡 Key Insights</span>
-          </div>
           <div style="color: #444; font-size: 14px; line-height: 1.6;">
             <p style="margin: 8px 0; line-height: 1.6;">${htmlSummary}</p>
           </div>
@@ -458,7 +455,6 @@ ${index + 1}. ${story.title}
       
       storiesText += `
    
-💡 KEY INSIGHTS:
 ${cleanSummary}`;
     }
     
