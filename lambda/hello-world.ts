@@ -358,7 +358,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
   let storiesHTML = '';
   stories.forEach((story, index) => {
     storiesHTML += `
-      <div style="margin-bottom: 25px; padding: 15px; border-left: 4px solid #ff6600; background-color: #f9f9f9;">
+      <div style="margin-bottom: 25px; padding: 15px; background-color: #f9f9f9;">
         <h3 style="margin: 0 0 10px 0; color: #333;">
           ${index + 1}. <a href="${story.url}" style="color: #ff6600; text-decoration: none;">${story.title}</a>
         </h3>
@@ -384,7 +384,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         .replace(/\n/g, '<br>');
       
       storiesHTML += `
-        <div style="margin-top: 15px; padding: 20px; background-color: #fff; border-radius: 6px; border-left: 4px solid #ff6600; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="margin-top: 15px; padding: 20px; background-color: #fff; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
           <div style="margin-bottom: 10px;">
             <span style="font-size: 16px; font-weight: bold; color: #ff6600;">💡 Key Insights</span>
           </div>
