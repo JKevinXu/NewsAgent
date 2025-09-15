@@ -362,11 +362,6 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         <h3 style="margin: 0 0 10px 0; color: #333;">
           ${index + 1}. <a href="${story.url}" style="color: #ff6600; text-decoration: none;">${story.title}</a>
         </h3>
-        <p style="margin: 5px 0; color: #666; font-size: 14px;">
-          👤 <strong>Author:</strong> ${story.author} | 
-          ⭐ <strong>Score:</strong> ${story.score} points | 
-          💬 <strong>Comments:</strong> ${story.comments}
-        </p>
         <p style="margin: 5px 0; color: #888; font-size: 12px;">
           🕐 Posted: ${new Date(story.timestamp).toLocaleString()}
         </p>`;
@@ -374,9 +369,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
     if (story.summary) {
       // Convert markdown to HTML for better rendering
       const htmlSummary = story.summary
-        .replace(/# (.*)/g, '<h3 style="color: #ff6600; margin: 15px 0 10px 0; font-size: 16px;">$1</h3>')
-        .replace(/## (.*)/g, '<h4 style="color: #333; margin: 12px 0 8px 0; font-size: 15px; font-weight: bold;">$1</h4>')
-        .replace(/### (.*)/g, '<h5 style="color: #555; margin: 10px 0 6px 0; font-size: 14px; font-weight: bold;">$1</h5>')
+        .replace(/^#+\s*/gm, '') // Remove all markdown headers (# ## ### etc)
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
         .replace(/^\d+\. (.*)/gm, '<div style="margin: 8px 0; padding-left: 15px;"><strong>• $1</strong></div>')
@@ -439,16 +432,13 @@ function generateEmailText(stories: StoryInfo[], timestamp: string): string {
   stories.forEach((story, index) => {
     storiesText += `
 ${index + 1}. ${story.title}
-   Author: ${story.author} | Score: ${story.score} points | Comments: ${story.comments}
    URL: ${story.url}
    Posted: ${new Date(story.timestamp).toLocaleString()}`;
     
     if (story.summary) {
       // Clean up markdown for plain text email
       const cleanSummary = story.summary
-        .replace(/# (.*)/g, '\n📋 $1\n' + '='.repeat(50))
-        .replace(/## (.*)/g, '\n🔍 $1\n' + '-'.repeat(30))
-        .replace(/### (.*)/g, '\n• $1')
+        .replace(/^#+\s*/gm, '') // Remove all markdown headers
         .replace(/\*\*(.*?)\*\*/g, '$1')
         .replace(/\*(.*?)\*/g, '$1')
         .replace(/^\d+\. /gm, '   → ');
