@@ -2,6 +2,8 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda
 import * as https from 'https';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { PollyClient, SynthesizeSpeechCommand } from '@aws-sdk/client-polly';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 interface HackerNewsItem {
   id: number;
@@ -21,6 +23,7 @@ interface StoryInfo {
   comments: number;
   timestamp: string;
   summary?: string;
+  audioUrl?: string;
 }
 
 export const handler = async (
@@ -228,6 +231,12 @@ async function processStoryWithSummary(story: HackerNewsItem): Promise<StoryInfo
       if (articleContent && articleContent !== 'Unable to fetch article content') {
         const summary = await summarizeWithBedrock(story.title, articleContent);
         basicInfo.summary = summary;
+        
+        // Generate audio for the summary
+        if (summary && summary !== 'Summary unavailable') {
+          const audioUrl = await generateAudio(story.title, summary);
+          basicInfo.audioUrl = audioUrl;
+        }
       }
     } catch (error) {
       console.error(`Failed to summarize article: ${story.title}`, error);
@@ -308,6 +317,91 @@ Assistant:`;
   }
 }
 
+async function generateAudio(title: string, summary: string): Promise<string | undefined> {
+  try {
+    console.log(`🎵 Generating audio for: ${title}`);
+    
+    const pollyClient = new PollyClient({ 
+      region: process.env.AWS_REGION || 'us-west-2' 
+    });
+    
+    const s3Client = new S3Client({ 
+      region: process.env.AWS_REGION || 'us-west-2' 
+    });
+
+    // Clean text for speech synthesis
+    const speechText = summary
+      .replace(/^#+\s*/gm, '') // Remove markdown headers
+      .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold formatting
+      .replace(/\*(.*?)\*/g, '$1') // Remove italic formatting
+      .replace(/\n+/g, ' ') // Replace line breaks with spaces
+      .trim();
+
+    // Generate speech with Polly
+    const synthesizeCommand = new SynthesizeSpeechCommand({
+      Text: speechText,
+      OutputFormat: 'mp3',
+      VoiceId: 'Joanna', // Natural-sounding neural voice
+      Engine: 'neural'
+    });
+
+    const pollyResponse = await pollyClient.send(synthesizeCommand);
+    
+    if (!pollyResponse.AudioStream) {
+      throw new Error('No audio stream received from Polly');
+    }
+
+    // Convert audio stream to buffer
+    const audioBuffer = await streamToBuffer(pollyResponse.AudioStream);
+    
+    // Generate unique filename
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const titleSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50);
+    const filename = `audio/${timestamp}/${titleSlug}.mp3`;
+    
+    // Upload to S3
+    const bucketName = process.env.AUDIO_BUCKET_NAME;
+    if (!bucketName) {
+      throw new Error('AUDIO_BUCKET_NAME environment variable not set');
+    }
+
+    const uploadCommand = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: filename,
+      Body: audioBuffer,
+      ContentType: 'audio/mpeg'
+    });
+
+    await s3Client.send(uploadCommand);
+    
+    const audioUrl = `https://${bucketName}.s3.${process.env.AWS_REGION || 'us-west-2'}.amazonaws.com/${filename}`;
+    console.log(`🎵 Audio generated: ${audioUrl}`);
+    
+    return audioUrl;
+  } catch (error) {
+    console.error(`❌ Failed to generate audio:`, error);
+    return undefined;
+  }
+}
+
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    
+    stream.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    
+    stream.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+    
+    stream.on('error', (error: Error) => {
+      reject(error);
+    });
+  });
+}
+
 async function sendEmailSummary(stories: StoryInfo[], timestamp: string): Promise<void> {
   const sesClient = new SESClient({ 
     region: process.env.AWS_REGION || 'us-west-2' 
@@ -380,7 +474,19 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
         <div style="margin-top: 15px; padding: 20px; background-color: #fff; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
           <div style="color: #444; font-size: 14px; line-height: 1.6;">
             <p style="margin: 8px 0; line-height: 1.6;">${htmlSummary}</p>
-          </div>
+          </div>`;
+      
+      if (story.audioUrl) {
+        storiesHTML += `        
+        <div style="margin-top: 15px; padding: 12px; background-color: #f8f9fa; border-radius: 6px; text-align: center;">
+          <a href="${story.audioUrl}" style="display: inline-block; padding: 10px 20px; background-color: #ff6600; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
+            🎵 Play Audio Summary
+          </a>
+          <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">Click to listen to AI-generated summary (MP3)</p>
+        </div>`;
+      }
+      
+      storiesHTML += `
         </div>`;
     }
     

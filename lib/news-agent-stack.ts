@@ -4,11 +4,31 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 export class NewsAgentStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // Create S3 bucket for audio files
+    const audioBucket = new s3.Bucket(this, 'NewsAgentAudioBucket', {
+      bucketName: `newsagent-audio-${cdk.Aws.ACCOUNT_ID}-${cdk.Aws.REGION}`,
+      publicReadAccess: true,
+      blockPublicAccess: {
+        blockPublicAcls: false,
+        blockPublicPolicy: false,
+        ignorePublicAcls: false,
+        restrictPublicBuckets: false,
+      },
+      cors: [
+        {
+          allowedHeaders: ['*'],
+          allowedMethods: [s3.HttpMethods.GET],
+          allowedOrigins: ['*'],
+        },
+      ],
+    });
 
     // Create Lambda function
     const newsAgentLambda = new lambda.Function(this, 'NewsAgentFunction', {
@@ -23,7 +43,8 @@ export class NewsAgentStack extends cdk.Stack {
         NODE_ENV: 'production',
         LOG_LEVEL: 'info',
         USER_AGENT: 'Mozilla/5.0 (compatible; NewsAgent/1.0; +https://github.com/JKevinXu/NewsAgent)',
-        SES_FROM_EMAIL: 'xkevinj@gmail.com' // Using your Gmail as sender for verification
+        SES_FROM_EMAIL: 'xkevinj@gmail.com', // Using your Gmail as sender for verification
+        AUDIO_BUCKET_NAME: audioBucket.bucketName
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -46,6 +67,18 @@ export class NewsAgentStack extends cdk.Stack {
       ],
       resources: ['*'], // You can restrict this to specific Bedrock models
     }));
+
+    // Add Polly permissions to the Lambda function
+    newsAgentLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'polly:SynthesizeSpeech'
+      ],
+      resources: ['*'],
+    }));
+
+    // Add S3 permissions for audio bucket
+    audioBucket.grantReadWrite(newsAgentLambda);
 
     // Create EventBridge rule for cron job (runs daily at 6 AM UTC+8 / 10 PM UTC)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
