@@ -26,6 +26,11 @@ interface StoryInfo {
   audioUrl?: string;
 }
 
+interface NewsletterData {
+  stories: StoryInfo[];
+  combinedAudioUrl?: string;
+}
+
 export const handler = async (
   event: APIGatewayProxyEvent | any,
   context: Context
@@ -76,10 +81,25 @@ export const handler = async (
 
     console.log('=== END SUMMARY ===\n');
 
+    // Filter stories with summaries for combined audio
+    const storiesWithSummaries = stories.filter(story => story.summary && story.summary !== 'Summary unavailable');
+    
+    // Generate combined audio for all summaries
+    let combinedAudioUrl: string | undefined;
+    if (storiesWithSummaries.length > 0) {
+      combinedAudioUrl = await generateCombinedAudio(storiesWithSummaries, currentTime);
+    }
+
+    // Prepare newsletter data
+    const newsletterData: NewsletterData = {
+      stories: storiesWithSummaries,
+      combinedAudioUrl
+    };
+
     // Send email summary
     let emailSent = false;
     try {
-      await sendEmailSummary(stories, currentTime);
+      await sendEmailSummary(newsletterData, currentTime);
       emailSent = true;
       console.log('📧 Email summary sent successfully to xkevinj@gmail.com');
     } catch (error) {
@@ -384,6 +404,101 @@ async function generateAudio(title: string, summary: string): Promise<string | u
   }
 }
 
+async function generateCombinedAudio(stories: StoryInfo[], timestamp: string): Promise<string | undefined> {
+  try {
+    console.log(`🎵 Generating combined audio for ${stories.length} stories`);
+    
+    const pollyClient = new PollyClient({ 
+      region: process.env.AWS_REGION || 'us-west-2' 
+    });
+    
+    const s3Client = new S3Client({ 
+      region: process.env.AWS_REGION || 'us-west-2' 
+    });
+
+    // Create combined script with all summaries (truncated for Polly's 3000 char limit)
+    let combinedScript = "Welcome to your Hacker News daily digest. Here are today's top stories.\n\n";
+    
+    stories.forEach((story, index) => {
+      if (story.summary) {
+        combinedScript += `Story ${index + 1}: ${story.title}.\n\n`;
+        
+        // Clean and truncate the summary for audio (keep it short for Polly limits)
+        let cleanSummary = story.summary
+          .replace(/^#+\s*/gm, '') // Remove markdown headers
+          .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold formatting
+          .replace(/\*(.*?)\*/g, '$1') // Remove italic formatting
+          .replace(/\n+/g, ' ') // Replace line breaks with spaces
+          .trim();
+        
+        // Split summary into key parts and take the first part only for audio
+        const summaryParts = cleanSummary.split(/Key Insight|Summary/i);
+        const shortSummary = summaryParts[0] || cleanSummary;
+        
+        // Limit each story summary to ~200 characters for audio
+        const truncatedSummary = shortSummary.length > 200 
+          ? shortSummary.substring(0, 200).trim() + "..."
+          : shortSummary;
+        
+        combinedScript += `${truncatedSummary}\n\n`;
+        
+        // Add a pause between stories
+        if (index < stories.length - 1) {
+          combinedScript += "Next story.\n\n";
+        }
+      }
+    });
+    
+    combinedScript += "That concludes today's digest. Visit the full email for detailed insights.";
+
+    console.log(`📝 Combined script length: ${combinedScript.length} characters`);
+
+    // Generate speech with Polly
+    const synthesizeCommand = new SynthesizeSpeechCommand({
+      Text: combinedScript,
+      OutputFormat: 'mp3',
+      VoiceId: 'Joanna', // Natural-sounding neural voice
+      Engine: 'neural'
+    });
+
+    const pollyResponse = await pollyClient.send(synthesizeCommand);
+    
+    if (!pollyResponse.AudioStream) {
+      throw new Error('No audio stream received from Polly');
+    }
+
+    // Convert audio stream to buffer
+    const audioBuffer = await streamToBuffer(pollyResponse.AudioStream);
+    
+    // Generate unique filename for combined audio
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename = `audio/${dateStamp}/daily-digest-${Date.now()}.mp3`;
+    
+    // Upload to S3
+    const bucketName = process.env.AUDIO_BUCKET_NAME;
+    if (!bucketName) {
+      throw new Error('AUDIO_BUCKET_NAME environment variable not set');
+    }
+
+    const uploadCommand = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: filename,
+      Body: audioBuffer,
+      ContentType: 'audio/mpeg'
+    });
+
+    await s3Client.send(uploadCommand);
+    
+    const audioUrl = `https://${bucketName}.s3.${process.env.AWS_REGION || 'us-west-2'}.amazonaws.com/${filename}`;
+    console.log(`🎵 Combined audio generated: ${audioUrl}`);
+    
+    return audioUrl;
+  } catch (error) {
+    console.error(`❌ Failed to generate combined audio:`, error);
+    return undefined;
+  }
+}
+
 async function streamToBuffer(stream: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -402,14 +517,14 @@ async function streamToBuffer(stream: any): Promise<Buffer> {
   });
 }
 
-async function sendEmailSummary(stories: StoryInfo[], timestamp: string): Promise<void> {
+async function sendEmailSummary(newsletterData: NewsletterData, timestamp: string): Promise<void> {
   const sesClient = new SESClient({ 
     region: process.env.AWS_REGION || 'us-west-2' 
   });
 
   // Create HTML email content
-  const htmlContent = generateEmailHTML(stories, timestamp);
-  const textContent = generateEmailText(stories, timestamp);
+  const htmlContent = generateEmailHTML(newsletterData, timestamp);
+  const textContent = generateEmailText(newsletterData, timestamp);
 
   const params = {
     Destination: {
@@ -438,7 +553,7 @@ async function sendEmailSummary(stories: StoryInfo[], timestamp: string): Promis
   await sesClient.send(command);
 }
 
-function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
+function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): string {
   const date = new Date(timestamp).toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -449,8 +564,21 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
     timeZoneName: 'short'
   });
 
+  // Add "Play All" button if combined audio is available
+  let playAllSection = '';
+  if (newsletterData.combinedAudioUrl) {
+    playAllSection = `
+      <div style="margin-bottom: 30px; padding: 20px; background-color: #f0f8ff; border-radius: 8px; text-align: center; border: 2px solid #ff6600;">
+        <h2 style="color: #ff6600; font-size: 20px; margin: 0 0 15px 0;">🎧 Listen to All Stories</h2>
+        <a href="${newsletterData.combinedAudioUrl}" style="display: inline-block; padding: 15px 30px; background-color: #ff6600; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 8px rgba(255,102,0,0.3);">
+          🎵 Play Full Daily Digest
+        </a>
+        <p style="margin: 10px 0 0 0; font-size: 14px; color: #666;">Listen to all ${newsletterData.stories.length} story summaries in one continuous audio</p>
+      </div>`;
+  }
+
   let storiesHTML = '';
-  stories.forEach((story, index) => {
+  newsletterData.stories.forEach((story, index) => {
     storiesHTML += `
       <div style="margin-bottom: 25px; padding: 15px; background-color: #f9f9f9;">
         <h3 style="margin: 0 0 10px 0; color: #333;">
@@ -476,15 +604,6 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
             <p style="margin: 8px 0; line-height: 1.6;">${htmlSummary}</p>
           </div>`;
       
-      if (story.audioUrl) {
-        storiesHTML += `        
-        <div style="margin-top: 15px; padding: 12px; background-color: #f8f9fa; border-radius: 6px; text-align: center;">
-          <a href="${story.audioUrl}" style="display: inline-block; padding: 10px 20px; background-color: #ff6600; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
-            🎵 Play Audio Summary
-          </a>
-          <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">Click to listen to AI-generated summary (MP3)</p>
-        </div>`;
-      }
       
       storiesHTML += `
         </div>`;
@@ -509,8 +628,10 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
             <p style="margin: 5px 0 0 0; font-size: 14px;">${date}</p>
         </div>
         
+        ${playAllSection}
+        
         <div style="margin-bottom: 20px;">
-            <h2 style="color: #ff6600;">🔥 Top ${stories.length} Stories</h2>
+            <h2 style="color: #ff6600;">🔥 Top ${newsletterData.stories.length} Stories</h2>
             ${storiesHTML}
         </div>
         
@@ -523,7 +644,7 @@ function generateEmailHTML(stories: StoryInfo[], timestamp: string): string {
   `;
 }
 
-function generateEmailText(stories: StoryInfo[], timestamp: string): string {
+function generateEmailText(newsletterData: NewsletterData, timestamp: string): string {
   const date = new Date(timestamp).toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -534,8 +655,21 @@ function generateEmailText(stories: StoryInfo[], timestamp: string): string {
     timeZoneName: 'short'
   });
 
+  // Add "Play All" button if combined audio is available
+  let playAllText = '';
+  if (newsletterData.combinedAudioUrl) {
+    playAllText = `
+🎧 LISTEN TO ALL STORIES
+Play Full Daily Digest: ${newsletterData.combinedAudioUrl}
+Listen to all ${newsletterData.stories.length} story summaries in one continuous audio
+
+---
+
+`;
+  }
+
   let storiesText = '';
-  stories.forEach((story, index) => {
+  newsletterData.stories.forEach((story, index) => {
     storiesText += `
 ${index + 1}. ${story.title}
    URL: ${story.url}
@@ -564,7 +698,7 @@ HACKER NEWS SUMMARY
 Generated by NewsAgent with AI Summaries
 ${date}
 
-Top ${stories.length} Stories:
+${playAllText}Top ${newsletterData.stories.length} Stories:
 ${storiesText}
 ---
 This summary was automatically generated by your NewsAgent Lambda function.
