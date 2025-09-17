@@ -114,7 +114,8 @@ export const handler = async (
       data: {
         storiesProcessed: stories.length,
         stories: stories,
-        emailSent: emailSent
+        emailSent: emailSent,
+        combinedAudioUrl: combinedAudioUrl
       }
     };
 
@@ -416,59 +417,63 @@ async function generateCombinedAudio(stories: StoryInfo[], timestamp: string): P
       region: process.env.AWS_REGION || 'us-west-2' 
     });
 
-    // Create combined script with all summaries (truncated for Polly's 3000 char limit)
-    let combinedScript = "Welcome to your Hacker News daily digest. Here are today's top stories.\n\n";
+    const audioBuffers: Buffer[] = [];
     
-    stories.forEach((story, index) => {
+    // Generate intro
+    console.log('🎵 Generating intro audio...');
+    const introText = "Welcome to your Hacker News daily digest. Here are today's top stories with AI-generated summaries.";
+    const introBuffer = await generateSingleAudioBuffer(pollyClient, introText);
+    if (introBuffer) audioBuffers.push(introBuffer);
+    
+    // Generate audio for each story individually
+    for (let index = 0; index < stories.length; index++) {
+      const story = stories[index];
       if (story.summary) {
-        combinedScript += `Story ${index + 1}: ${story.title}.\n\n`;
+        console.log(`🎵 Generating audio for story ${index + 1}: ${story.title}`);
         
-        // Clean and truncate the summary for audio (keep it short for Polly limits)
-        let cleanSummary = story.summary
+        // Create title introduction
+        const titleText = `Story ${index + 1}: ${story.title}.`;
+        const titleBuffer = await generateSingleAudioBuffer(pollyClient, titleText);
+        if (titleBuffer) audioBuffers.push(titleBuffer);
+        
+        // Clean the full summary for audio (keep complete summary)
+        const cleanSummary = story.summary
           .replace(/^#+\s*/gm, '') // Remove markdown headers
           .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold formatting
           .replace(/\*(.*?)\*/g, '$1') // Remove italic formatting
           .replace(/\n+/g, ' ') // Replace line breaks with spaces
           .trim();
         
-        // Split summary into key parts and take the first part only for audio
-        const summaryParts = cleanSummary.split(/Key Insight|Summary/i);
-        const shortSummary = summaryParts[0] || cleanSummary;
+        // Split long summaries into chunks if needed (Polly has 3000 char limit)
+        const summaryChunks = splitTextIntoChunks(cleanSummary, 2500);
         
-        // Limit each story summary to ~200 characters for audio
-        const truncatedSummary = shortSummary.length > 200 
-          ? shortSummary.substring(0, 200).trim() + "..."
-          : shortSummary;
+        // Generate audio for each chunk of the summary
+        for (const chunk of summaryChunks) {
+          const chunkBuffer = await generateSingleAudioBuffer(pollyClient, chunk);
+          if (chunkBuffer) audioBuffers.push(chunkBuffer);
+        }
         
-        combinedScript += `${truncatedSummary}\n\n`;
-        
-        // Add a pause between stories
+        // Add a small pause between stories
         if (index < stories.length - 1) {
-          combinedScript += "Next story.\n\n";
+          const pauseBuffer = await generateSingleAudioBuffer(pollyClient, "Next story.");
+          if (pauseBuffer) audioBuffers.push(pauseBuffer);
         }
       }
-    });
-    
-    combinedScript += "That concludes today's digest. Visit the full email for detailed insights.";
-
-    console.log(`📝 Combined script length: ${combinedScript.length} characters`);
-
-    // Generate speech with Polly
-    const synthesizeCommand = new SynthesizeSpeechCommand({
-      Text: combinedScript,
-      OutputFormat: 'mp3',
-      VoiceId: 'Joanna', // Natural-sounding neural voice
-      Engine: 'neural'
-    });
-
-    const pollyResponse = await pollyClient.send(synthesizeCommand);
-    
-    if (!pollyResponse.AudioStream) {
-      throw new Error('No audio stream received from Polly');
     }
-
-    // Convert audio stream to buffer
-    const audioBuffer = await streamToBuffer(pollyResponse.AudioStream);
+    
+    // Generate outro
+    console.log('🎵 Generating outro audio...');
+    const outroText = "That concludes today's Hacker News digest. Thank you for listening.";
+    const outroBuffer = await generateSingleAudioBuffer(pollyClient, outroText);
+    if (outroBuffer) audioBuffers.push(outroBuffer);
+    
+    if (audioBuffers.length === 0) {
+      throw new Error('No audio buffers were generated');
+    }
+    
+    // Concatenate all audio buffers
+    console.log(`🎵 Concatenating ${audioBuffers.length} audio segments...`);
+    const combinedBuffer = Buffer.concat(audioBuffers);
     
     // Generate unique filename for combined audio
     const dateStamp = new Date().toISOString().slice(0, 10);
@@ -483,7 +488,7 @@ async function generateCombinedAudio(stories: StoryInfo[], timestamp: string): P
     const uploadCommand = new PutObjectCommand({
       Bucket: bucketName,
       Key: filename,
-      Body: audioBuffer,
+      Body: combinedBuffer,
       ContentType: 'audio/mpeg'
     });
 
@@ -496,6 +501,68 @@ async function generateCombinedAudio(stories: StoryInfo[], timestamp: string): P
   } catch (error) {
     console.error(`❌ Failed to generate combined audio:`, error);
     return undefined;
+  }
+}
+
+function splitTextIntoChunks(text: string, maxChunkSize: number): string[] {
+  if (text.length <= maxChunkSize) {
+    return [text];
+  }
+  
+  const chunks: string[] = [];
+  let currentChunk = '';
+  
+  // Split by sentences to maintain natural breaks
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  
+  for (const sentence of sentences) {
+    const trimmedSentence = sentence.trim();
+    if (!trimmedSentence) continue;
+    
+    const sentenceWithPunctuation = trimmedSentence + '.';
+    
+    // If adding this sentence would exceed the limit, save current chunk and start new one
+    if (currentChunk.length + sentenceWithPunctuation.length + 1 > maxChunkSize) {
+      if (currentChunk.trim()) {
+        chunks.push(currentChunk.trim());
+      }
+      currentChunk = sentenceWithPunctuation;
+    } else {
+      currentChunk += (currentChunk ? ' ' : '') + sentenceWithPunctuation;
+    }
+  }
+  
+  // Add the last chunk if it has content
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+  
+  return chunks.length > 0 ? chunks : [text]; // Fallback to original text if no chunks created
+}
+
+async function generateSingleAudioBuffer(pollyClient: PollyClient, text: string): Promise<Buffer | null> {
+  try {
+    // Ensure text is within Polly's limits (3000 characters)
+    const truncatedText = text.length > 2800 ? text.substring(0, 2800) + "..." : text;
+    
+    const synthesizeCommand = new SynthesizeSpeechCommand({
+      Text: truncatedText,
+      OutputFormat: 'mp3',
+      VoiceId: 'Joanna',
+      Engine: 'neural'
+    });
+
+    const pollyResponse = await pollyClient.send(synthesizeCommand);
+    
+    if (!pollyResponse.AudioStream) {
+      console.error('No audio stream received from Polly');
+      return null;
+    }
+
+    return await streamToBuffer(pollyResponse.AudioStream);
+  } catch (error) {
+    console.error(`❌ Failed to generate single audio buffer:`, error);
+    return null;
   }
 }
 
