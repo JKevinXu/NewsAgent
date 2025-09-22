@@ -11,7 +11,7 @@ test('Lambda Function Created', () => {
   template.hasResourceProperties('AWS::Lambda::Function', {
     Runtime: 'nodejs18.x',
     Handler: 'hello-world.handler',
-    FunctionName: 'news-agent-hello-world'
+    FunctionName: 'news-agent'
   });
 });
 
@@ -22,7 +22,7 @@ test('EventBridge Rule Created', () => {
 
   // Check that an EventBridge rule is created
   template.hasResourceProperties('AWS::Events::Rule', {
-    ScheduleExpression: 'rate(5 minutes)',
+    ScheduleExpression: 'cron(0 22 * * ? *)',
     State: 'ENABLED'
   });
 });
@@ -44,6 +44,21 @@ test('Lambda has correct IAM permissions', () => {
           }
         }
       ]
+    }
+  });
+});
+
+test('DynamoDB Table Created', () => {
+  const app = new cdk.App();
+  const stack = new NewsAgent.NewsAgentStack(app, 'MyTestStack');
+  const template = Template.fromStack(stack);
+
+  // Check that DynamoDB table is created
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    TableName: 'newsagent-recommendations',
+    BillingMode: 'PAY_PER_REQUEST',
+    PointInTimeRecoverySpecification: {
+      PointInTimeRecoveryEnabled: true
     }
   });
 });

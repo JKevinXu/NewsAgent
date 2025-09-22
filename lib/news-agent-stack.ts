@@ -5,11 +5,30 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
 
 export class NewsAgentStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    // Create DynamoDB table for storing daily recommendations
+    const recommendationsTable = new dynamodb.Table(this, 'NewsAgentRecommendations', {
+      tableName: 'newsagent-recommendations',
+      partitionKey: { name: 'date', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      timeToLiveAttribute: 'ttl', // Auto-delete old records after 365 days
+    });
+
+    // Add GSI for querying by source
+    recommendationsTable.addGlobalSecondaryIndex({
+      indexName: 'source-date-index',
+      partitionKey: { name: 'source', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
+    });
 
     // Create S3 bucket for audio files
     const audioBucket = new s3.Bucket(this, 'NewsAgentAudioBucket', {
@@ -44,7 +63,8 @@ export class NewsAgentStack extends cdk.Stack {
         LOG_LEVEL: 'info',
         USER_AGENT: 'Mozilla/5.0 (compatible; NewsAgent/1.0; +https://github.com/JKevinXu/NewsAgent)',
         SES_FROM_EMAIL: 'xkevinj@gmail.com', // Using your Gmail as sender for verification
-        AUDIO_BUCKET_NAME: audioBucket.bucketName
+        AUDIO_BUCKET_NAME: audioBucket.bucketName,
+        RECOMMENDATIONS_TABLE_NAME: recommendationsTable.tableName
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -79,6 +99,9 @@ export class NewsAgentStack extends cdk.Stack {
 
     // Add S3 permissions for audio bucket
     audioBucket.grantReadWrite(newsAgentLambda);
+
+    // Add DynamoDB permissions to the Lambda function
+    recommendationsTable.grantReadWriteData(newsAgentLambda);
 
     // Create EventBridge rule for cron job (runs daily at 6 AM UTC+8 / 10 PM UTC)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
@@ -126,6 +149,13 @@ export class NewsAgentStack extends cdk.Stack {
       value: 'cron(0 22 * * ? *)',
       description: 'Schedule expression for the NewsAgent cron job (Daily at 6 AM UTC+8)',
       exportName: 'NewsAgent-CronSchedule'
+    });
+
+    // Output the DynamoDB table name
+    new cdk.CfnOutput(this, 'RecommendationsTableName', {
+      value: recommendationsTable.tableName,
+      description: 'Name of the DynamoDB table storing daily recommendations',
+      exportName: 'NewsAgent-RecommendationsTable-Name'
     });
   }
 }

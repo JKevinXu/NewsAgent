@@ -4,6 +4,8 @@ import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { PollyClient, SynthesizeSpeechCommand } from '@aws-sdk/client-polly';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 
 interface HackerNewsItem {
   id: number;
@@ -63,6 +65,32 @@ interface StoryInfo {
 interface NewsletterData {
   stories: StoryInfo[];
   combinedAudioUrl?: string;
+}
+
+interface DailyRecommendation {
+  date: string; // YYYY-MM-DD format (partition key)
+  id: string; // unique identifier for each story (sort key)
+  source: 'hacker-news' | 'product-hunt' | 'github-trending';
+  title: string;
+  url: string;
+  score: number;
+  author: string;
+  comments: number;
+  timestamp: string; // ISO string
+  summary?: string;
+  audioUrl?: string;
+  ttl: number; // Unix timestamp for automatic deletion after 365 days
+}
+
+interface DailyDigest {
+  date: string; // YYYY-MM-DD format (partition key)
+  id: string; // 'digest' (sort key)
+  source: 'daily-digest';
+  totalStories: number;
+  timestamp: string; // ISO string
+  combinedAudioUrl?: string;
+  emailSent: boolean;
+  ttl: number; // Unix timestamp for automatic deletion after 365 days
 }
 
 export const handler = async (
@@ -164,6 +192,14 @@ export const handler = async (
       stories: storiesWithSummaries,
       combinedAudioUrl
     };
+
+    // Save recommendations to database
+    try {
+      await saveDailyRecommendations(stories, currentTime, combinedAudioUrl);
+      console.log('💾 Daily recommendations saved to database successfully');
+    } catch (error) {
+      console.error('❌ Failed to save recommendations to database:', error);
+    }
 
     // Send email summary
     let emailSent = false;
@@ -807,6 +843,130 @@ async function streamToBuffer(stream: any): Promise<Buffer> {
   });
 }
 
+async function saveDailyRecommendations(
+  stories: StoryInfo[], 
+  timestamp: string, 
+  combinedAudioUrl?: string
+): Promise<void> {
+  const dynamoClient = new DynamoDBClient({ 
+    region: process.env.AWS_REGION || 'us-west-2' 
+  });
+  
+  const docClient = DynamoDBDocumentClient.from(dynamoClient);
+  const tableName = process.env.RECOMMENDATIONS_TABLE_NAME;
+  
+  if (!tableName) {
+    throw new Error('RECOMMENDATIONS_TABLE_NAME environment variable not set');
+  }
+
+  const date = new Date(timestamp).toISOString().split('T')[0]; // YYYY-MM-DD format
+  const oneYearFromNow = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60); // TTL in seconds
+
+  console.log(`💾 Saving ${stories.length} recommendations for date: ${date}`);
+
+  // Save individual story recommendations
+  const putRequests = stories.map((story, index) => ({
+    PutRequest: {
+      Item: {
+        date: date,
+        id: `${story.source}-${index}-${Date.now()}`, // Unique ID for each story
+        source: story.source,
+        title: story.title,
+        url: story.url,
+        score: story.score,
+        author: story.author,
+        comments: story.comments,
+        timestamp: story.timestamp,
+        summary: story.summary || '',
+        audioUrl: story.audioUrl || '',
+        ttl: oneYearFromNow
+      } as DailyRecommendation
+    }
+  }));
+
+  // Save daily digest metadata
+  const digestRecord: DailyDigest = {
+    date: date,
+    id: 'digest',
+    source: 'daily-digest',
+    totalStories: stories.length,
+    timestamp: timestamp,
+    combinedAudioUrl: combinedAudioUrl || '',
+    emailSent: false, // Will be updated after email is sent
+    ttl: oneYearFromNow
+  };
+
+  try {
+    // Batch write individual recommendations (max 25 items per batch)
+    const batches = [];
+    for (let i = 0; i < putRequests.length; i += 25) {
+      batches.push(putRequests.slice(i, i + 25));
+    }
+
+    for (const batch of batches) {
+      const batchWriteCommand = new BatchWriteCommand({
+        RequestItems: {
+          [tableName]: batch
+        }
+      });
+      await docClient.send(batchWriteCommand);
+    }
+
+    // Save digest record
+    const putDigestCommand = new PutCommand({
+      TableName: tableName,
+      Item: digestRecord
+    });
+    await docClient.send(putDigestCommand);
+
+    console.log(`✅ Successfully saved ${stories.length} recommendations and digest for ${date}`);
+  } catch (error) {
+    console.error('❌ Failed to save recommendations to database:', error);
+    throw error;
+  }
+}
+
+async function updateEmailSentStatus(timestamp: string): Promise<void> {
+  const dynamoClient = new DynamoDBClient({ 
+    region: process.env.AWS_REGION || 'us-west-2' 
+  });
+  
+  const docClient = DynamoDBDocumentClient.from(dynamoClient);
+  const tableName = process.env.RECOMMENDATIONS_TABLE_NAME;
+  
+  if (!tableName) {
+    throw new Error('RECOMMENDATIONS_TABLE_NAME environment variable not set');
+  }
+
+  const date = new Date(timestamp).toISOString().split('T')[0];
+
+  try {
+    const putCommand = new PutCommand({
+      TableName: tableName,
+      Item: {
+        date: date,
+        id: 'digest',
+        emailSent: true,
+        lastUpdated: timestamp
+      },
+      ConditionExpression: 'attribute_exists(#date) AND #id = :id',
+      ExpressionAttributeNames: {
+        '#date': 'date',
+        '#id': 'id'
+      },
+      ExpressionAttributeValues: {
+        ':id': 'digest'
+      }
+    });
+    
+    await docClient.send(putCommand);
+    console.log(`✅ Updated email sent status for ${date}`);
+  } catch (error) {
+    console.error('❌ Failed to update email sent status:', error);
+    // Don't throw error here as it's not critical
+  }
+}
+
 async function sendEmailSummary(newsletterData: NewsletterData, timestamp: string): Promise<void> {
   const sesClient = new SESClient({ 
     region: process.env.AWS_REGION || 'us-west-2' 
@@ -841,6 +1001,14 @@ async function sendEmailSummary(newsletterData: NewsletterData, timestamp: strin
 
   const command = new SendEmailCommand(params);
   await sesClient.send(command);
+  
+  // Update database with email sent status
+  try {
+    await updateEmailSentStatus(timestamp);
+  } catch (error) {
+    console.error('❌ Failed to update email sent status in database:', error);
+    // Don't fail the email send for this
+  }
 }
 
 function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): string {
