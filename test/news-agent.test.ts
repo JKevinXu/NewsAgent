@@ -62,3 +62,28 @@ test('DynamoDB Table Created', () => {
     }
   });
 });
+
+test('API Gateway Created', () => {
+  const app = new cdk.App();
+  const stack = new NewsAgent.NewsAgentStack(app, 'MyTestStack');
+  const template = Template.fromStack(stack);
+
+  // Check that API Gateway is created
+  template.hasResourceProperties('AWS::ApiGateway::RestApi', {
+    Name: 'NewsAgent API',
+    Description: 'API for accessing NewsAgent recommendations database'
+  });
+});
+
+test('API Lambda Function Created', () => {
+  const app = new cdk.App();
+  const stack = new NewsAgent.NewsAgentStack(app, 'MyTestStack');
+  const template = Template.fromStack(stack);
+
+  // Check that API Lambda function is created
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs18.x',
+    Handler: 'api.handler',
+    FunctionName: 'news-agent-api'
+  });
+});

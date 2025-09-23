@@ -68,8 +68,8 @@ interface NewsletterData {
 }
 
 interface DailyRecommendation {
-  date: string; // YYYY-MM-DD format (partition key)
-  id: string; // unique identifier for each story (sort key)
+  id: string; // unique identifier for each story (partition key)
+  date: string; // YYYY-MM-DD format 
   source: 'hacker-news' | 'product-hunt' | 'github-trending';
   title: string;
   url: string;
@@ -83,8 +83,8 @@ interface DailyRecommendation {
 }
 
 interface DailyDigest {
-  date: string; // YYYY-MM-DD format (partition key)
-  id: string; // 'digest' (sort key)
+  id: string; // 'digest-YYYY-MM-DD' (partition key)
+  date: string; // YYYY-MM-DD format
   source: 'daily-digest';
   totalStories: number;
   timestamp: string; // ISO string
@@ -868,8 +868,8 @@ async function saveDailyRecommendations(
   const putRequests = stories.map((story, index) => ({
     PutRequest: {
       Item: {
+        id: `${story.source}-${index}-${Date.now()}`, // Unique ID for each story (primary key)
         date: date,
-        id: `${story.source}-${index}-${Date.now()}`, // Unique ID for each story
         source: story.source,
         title: story.title,
         url: story.url,
@@ -886,8 +886,8 @@ async function saveDailyRecommendations(
 
   // Save daily digest metadata
   const digestRecord: DailyDigest = {
+    id: `digest-${date}`, // Unique digest ID (primary key)
     date: date,
-    id: 'digest',
     source: 'daily-digest',
     totalStories: stories.length,
     timestamp: timestamp,
@@ -944,18 +944,13 @@ async function updateEmailSentStatus(timestamp: string): Promise<void> {
     const putCommand = new PutCommand({
       TableName: tableName,
       Item: {
-        date: date,
-        id: 'digest',
+        id: `digest-${date}`,
         emailSent: true,
         lastUpdated: timestamp
       },
-      ConditionExpression: 'attribute_exists(#date) AND #id = :id',
+      ConditionExpression: 'attribute_exists(#id)',
       ExpressionAttributeNames: {
-        '#date': 'date',
         '#id': 'id'
-      },
-      ExpressionAttributeValues: {
-        ':id': 'digest'
       }
     });
     

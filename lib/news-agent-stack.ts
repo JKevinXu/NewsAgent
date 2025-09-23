@@ -6,29 +6,15 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { Construct } from 'constructs';
 
 export class NewsAgentStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Create DynamoDB table for storing daily recommendations
-    const recommendationsTable = new dynamodb.Table(this, 'NewsAgentRecommendations', {
-      tableName: 'newsagent-recommendations',
-      partitionKey: { name: 'date', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      timeToLiveAttribute: 'ttl', // Auto-delete old records after 365 days
-    });
-
-    // Add GSI for querying by source
-    recommendationsTable.addGlobalSecondaryIndex({
-      indexName: 'source-date-index',
-      partitionKey: { name: 'source', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
-    });
+    // Reference existing DynamoDB table for storing daily recommendations
+    const recommendationsTable = dynamodb.Table.fromTableName(this, 'NewsAgentRecommendations', 'newsagent-recommendations');
 
     // Create S3 bucket for audio files
     const audioBucket = new s3.Bucket(this, 'NewsAgentAudioBucket', {
@@ -103,6 +89,69 @@ export class NewsAgentStack extends cdk.Stack {
     // Add DynamoDB permissions to the Lambda function
     recommendationsTable.grantReadWriteData(newsAgentLambda);
 
+    // Create API Lambda function for database access
+    const apiLambda = new lambda.Function(this, 'NewsAgentApiFunction', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'api.handler',
+      code: lambda.Code.fromAsset('lambda-package'),
+      functionName: 'news-agent-api',
+      description: 'NewsAgent API function for querying recommendations database',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      environment: {
+        NODE_ENV: 'production',
+        LOG_LEVEL: 'info',
+        RECOMMENDATIONS_TABLE_NAME: recommendationsTable.tableName
+      },
+      logRetention: logs.RetentionDays.ONE_WEEK,
+    });
+
+    // Add DynamoDB permissions to the API Lambda function
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:Query',
+        'dynamodb:GetItem',
+        'dynamodb:Scan'
+      ],
+      resources: [
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/newsagent-recommendations`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/newsagent-recommendations/index/*`
+      ]
+    }));
+
+    // Create API Gateway
+    const api = new apigateway.RestApi(this, 'NewsAgentApi', {
+      restApiName: 'NewsAgent API',
+      description: 'API for accessing NewsAgent recommendations database',
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: ['Content-Type', 'X-Amz-Date', 'Authorization', 'X-Api-Key'],
+      },
+    });
+
+    // Create API resources and methods
+    const recommendationsResource = api.root.addResource('recommendations');
+    
+    // GET /recommendations - get all recommendations with optional date filter
+    recommendationsResource.addMethod('GET', new apigateway.LambdaIntegration(apiLambda), {
+      requestParameters: {
+        'method.request.querystring.date': false,
+        'method.request.querystring.source': false,
+        'method.request.querystring.limit': false,
+        'method.request.querystring.lastKey': false,
+      },
+    });
+
+    // GET /recommendations/{date} - get recommendations for specific date
+    const dateResource = recommendationsResource.addResource('{date}');
+    dateResource.addMethod('GET', new apigateway.LambdaIntegration(apiLambda));
+
+    // GET /recommendations/{date}/digest - get daily digest for specific date
+    const digestResource = dateResource.addResource('digest');
+    digestResource.addMethod('GET', new apigateway.LambdaIntegration(apiLambda));
+
     // Create EventBridge rule for cron job (runs daily at 6 AM UTC+8 / 10 PM UTC)
     const cronRule = new events.Rule(this, 'NewsAgentCronRule', {
       ruleName: 'news-agent-cron',
@@ -156,6 +205,20 @@ export class NewsAgentStack extends cdk.Stack {
       value: recommendationsTable.tableName,
       description: 'Name of the DynamoDB table storing daily recommendations',
       exportName: 'NewsAgent-RecommendationsTable-Name'
+    });
+
+    // Output the API Gateway URL
+    new cdk.CfnOutput(this, 'ApiGatewayUrl', {
+      value: api.url,
+      description: 'URL of the NewsAgent API Gateway',
+      exportName: 'NewsAgent-Api-Url'
+    });
+
+    // Output the API Lambda function ARN
+    new cdk.CfnOutput(this, 'ApiLambdaFunctionArn', {
+      value: apiLambda.functionArn,
+      description: 'ARN of the NewsAgent API Lambda function',
+      exportName: 'NewsAgent-ApiLambda-Arn'
     });
   }
 }
