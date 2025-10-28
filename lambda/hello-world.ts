@@ -17,23 +17,6 @@ interface HackerNewsItem {
   descendants?: number;
 }
 
-interface ProductHuntPost {
-  id: string;
-  name: string;
-  tagline: string;
-  description: string;
-  featured_at: string;
-  votes_count: number;
-  comments_count: number;
-  website: string;
-  redirect_url: string;
-  screenshot_url: {
-    "300px": string;
-    "850px": string;
-  };
-  maker_inside: boolean;
-}
-
 interface GitHubRepository {
   id: number;
   name: string;
@@ -57,7 +40,7 @@ interface StoryInfo {
   author: string;
   comments: number;
   timestamp: string;
-  source: 'hacker-news' | 'product-hunt' | 'github-trending';
+  source: 'hacker-news' | 'github-trending';
   summary?: string;
   audioUrl?: string;
 }
@@ -70,7 +53,7 @@ interface NewsletterData {
 interface DailyRecommendation {
   id: string; // unique identifier for each story (partition key)
   date: string; // YYYY-MM-DD format 
-  source: 'hacker-news' | 'product-hunt' | 'github-trending';
+  source: 'hacker-news' | 'github-trending';
   title: string;
   url: string;
   score: number;
@@ -107,15 +90,12 @@ export const handler = async (
     console.log('📰 Fetching top stories from Hacker News...');
     const topStories = await getTopHackerNewsStories(3); // Get top 3 stories
     
-    console.log('🏆 Fetching top products from Product Hunt...');
-    const topProducts = await getTopProductHuntPosts(3); // Get top 3 products
-    
     console.log('⭐ Fetching trending GitHub repositories...');
     const trendingRepos = await getTopGitHubTrending(3); // Get top 3 repos
     
-    console.log(`📊 Found ${topStories.length} Hacker News stories, ${topProducts.length} Product Hunt posts, and ${trendingRepos.length} GitHub repositories`);
+    console.log(`📊 Found ${topStories.length} Hacker News stories and ${trendingRepos.length} GitHub repositories`);
     
-    // Process each story/product to get basic info and summaries
+    // Process each story to get basic info and summaries
     const stories: StoryInfo[] = [];
     
     // Process Hacker News stories
@@ -129,20 +109,6 @@ export const handler = async (
         }
       } catch (error) {
         console.log(`❌ Failed to process HN story: ${story.title}`, error);
-      }
-    }
-    
-    // Process Product Hunt posts
-    for (const product of topProducts) {
-      try {
-        const productInfo = await processProductHuntPost(product);
-        stories.push(productInfo);
-        console.log(`✅ Processed PH: "${productInfo.title}" (${productInfo.score} votes, ${productInfo.comments} comments)`);
-        if (productInfo.summary) {
-          console.log(`📝 Summary: ${productInfo.summary}`);
-        }
-      } catch (error) {
-        console.log(`❌ Failed to process PH product: ${product.name}`, error);
       }
     }
     
@@ -372,76 +338,6 @@ async function getTopGitHubTrending(limit: number = 2): Promise<GitHubRepository
   }
 }
 
-async function getTopProductHuntPosts(limit: number = 3): Promise<ProductHuntPost[]> {
-  try {
-    console.log('🏆 Fetching Product Hunt posts (using curated trending products)...');
-    
-    // For now, let's use a curated list of trending tech products
-    // This can be improved later with proper Product Hunt API integration
-    const trendingProducts = [
-      {
-        name: "ChatGPT Desktop App",
-        tagline: "The official ChatGPT desktop application for seamless AI conversations",
-        website: "https://openai.com/chatgpt/desktop"
-      },
-      {
-        name: "Cursor AI Editor", 
-        tagline: "AI-first code editor built for pair programming with AI",
-        website: "https://cursor.sh"
-      },
-      {
-        name: "Linear",
-        tagline: "The issue tracking tool you'll enjoy using",
-        website: "https://linear.app"
-      },
-      {
-        name: "Vercel v0",
-        tagline: "Generate UI with shadcn/ui from simple text prompts and images",
-        website: "https://v0.dev"
-      },
-      {
-        name: "Supabase",
-        tagline: "The open source Firebase alternative",
-        website: "https://supabase.com"
-      }
-    ];
-
-    const posts: ProductHuntPost[] = [];
-    
-    // Randomly select some products and simulate votes
-    const shuffled = trendingProducts.sort(() => 0.5 - Math.random());
-    const selected = shuffled.slice(0, Math.min(limit, trendingProducts.length));
-    
-    selected.forEach((product, index) => {
-      const baseVotes = 150;
-      const randomVotes = Math.floor(Math.random() * 300) + baseVotes;
-      
-      posts.push({
-        id: `ph-trending-${index}`,
-        name: product.name,
-        tagline: product.tagline,
-        description: product.tagline,
-        featured_at: new Date().toISOString(),
-        votes_count: randomVotes,
-        comments_count: Math.floor(Math.random() * 50) + 10,
-        website: product.website,
-        redirect_url: product.website,
-        screenshot_url: {
-          "300px": "",
-          "850px": ""
-        },
-        maker_inside: true
-      });
-    });
-
-    console.log(`🏆 Generated ${posts.length} trending product entries`);
-    return posts;
-  } catch (error) {
-    console.error('Failed to fetch Product Hunt posts:', error);
-    // Return empty array on failure to not break the main flow
-    return [];
-  }
-}
 
 async function processStoryWithSummary(story: HackerNewsItem): Promise<StoryInfo> {
   const basicInfo: StoryInfo = {
@@ -477,30 +373,6 @@ async function processStoryWithSummary(story: HackerNewsItem): Promise<StoryInfo
   return basicInfo;
 }
 
-async function processProductHuntPost(post: ProductHuntPost): Promise<StoryInfo> {
-  const basicInfo: StoryInfo = {
-    title: post.name,
-    url: post.website || post.redirect_url,
-    score: post.votes_count,
-    author: 'Product Hunt',
-    comments: post.comments_count,
-    timestamp: post.featured_at,
-    source: 'product-hunt'
-  };
-
-  // Create a summary from the Product Hunt post data
-  const productSummary = `## Summary\n\n${post.name} is a new product featured on Product Hunt. ${post.tagline} ${post.description ? post.description : ''}\n\n## Key Insight\n\nThis product has gained ${post.votes_count} votes on Product Hunt, indicating strong community interest and potential market demand.`;
-  
-  basicInfo.summary = productSummary;
-
-  // Generate audio for the Product Hunt post summary
-  if (basicInfo.summary) {
-    const audioUrl = await generateAudio(basicInfo.title, basicInfo.summary);
-    basicInfo.audioUrl = audioUrl;
-  }
-
-  return basicInfo;
-}
 
 async function processGitHubRepository(repo: GitHubRepository): Promise<StoryInfo> {
   const basicInfo: StoryInfo = {
@@ -732,7 +604,7 @@ async function generateCombinedAudio(stories: StoryInfo[], timestamp: string): P
     
     // Concatenate all audio buffers
     console.log(`🎵 Concatenating ${audioBuffers.length} audio segments...`);
-    const combinedBuffer = Buffer.concat(audioBuffers);
+    const combinedBuffer = Buffer.concat(audioBuffers as Uint8Array[]);
     
     // Generate unique filename for combined audio
     const dateStamp = new Date().toISOString().slice(0, 10);
@@ -834,7 +706,7 @@ async function streamToBuffer(stream: any): Promise<Buffer> {
     });
     
     stream.on('end', () => {
-      resolve(Buffer.concat(chunks));
+      resolve(Buffer.concat(chunks as Uint8Array[]));
     });
     
     stream.on('error', (error: Error) => {
@@ -1037,10 +909,6 @@ function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): s
         sourceIcon = '📰';
         sourceColor = '#ff6600';
         sourceName = 'Hacker News';
-      } else if (story.source === 'product-hunt') {
-        sourceIcon = '🏆';
-        sourceColor = '#da552f';
-        sourceName = 'Product Hunt';
       } else if (story.source === 'github-trending') {
         sourceIcon = '⭐';
         sourceColor = '#24292e';
@@ -1095,9 +963,9 @@ function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): s
         <title>Hacker News Summary</title>
     </head>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #ff6600, #da552f); color: white; border-radius: 8px;">
+        <div style="text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #ff6600, #24292e); color: white; border-radius: 8px;">
             <h1 style="margin: 0;">🚀 Daily Tech Digest</h1>
-            <p style="margin: 10px 0 0 0;">Hacker News • Product Hunt • GitHub Trending</p>
+            <p style="margin: 10px 0 0 0;">Hacker News • GitHub Trending</p>
             <p style="margin: 5px 0 0 0; font-size: 14px;">${date}</p>
         </div>
         
@@ -1146,8 +1014,6 @@ Listen to all ${newsletterData.stories.length} story summaries in one continuous
     let sourceLabel;
     if (story.source === 'hacker-news') {
       sourceLabel = '📰 Hacker News';
-    } else if (story.source === 'product-hunt') {
-      sourceLabel = '🏆 Product Hunt';
     } else if (story.source === 'github-trending') {
       sourceLabel = '⭐ GitHub Trending';
     }
@@ -1176,7 +1042,7 @@ ${cleanSummary}`;
 
   return `
 DAILY TECH DIGEST
-Hacker News • Product Hunt • GitHub Trending
+Hacker News • GitHub Trending
 Generated by NewsAgent with AI Summaries
 ${date}
 
