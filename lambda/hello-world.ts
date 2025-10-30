@@ -33,6 +33,18 @@ interface GitHubRepository {
   };
 }
 
+interface ArXivPaper {
+  id: string;
+  title: string;
+  summary: string;
+  authors: string[];
+  published: string;
+  updated: string;
+  link: string;
+  categories: string[];
+  primary_category: string;
+}
+
 interface StoryInfo {
   title: string;
   url: string;
@@ -40,7 +52,7 @@ interface StoryInfo {
   author: string;
   comments: number;
   timestamp: string;
-  source: 'hacker-news' | 'github-trending';
+  source: 'hacker-news' | 'github-trending' | 'arxiv';
   summary?: string;
   audioUrl?: string;
 }
@@ -53,7 +65,7 @@ interface NewsletterData {
 interface DailyRecommendation {
   id: string; // unique identifier for each story (partition key)
   date: string; // YYYY-MM-DD format 
-  source: 'hacker-news' | 'github-trending';
+  source: 'hacker-news' | 'github-trending' | 'arxiv';
   title: string;
   url: string;
   score: number;
@@ -93,7 +105,10 @@ export const handler = async (
     console.log('⭐ Fetching trending GitHub repositories...');
     const trendingRepos = await getTopGitHubTrending(5); // Get top 5 repos
     
-    console.log(`📊 Found ${topStories.length} Hacker News stories and ${trendingRepos.length} GitHub repositories`);
+    console.log('📄 Fetching recent ArXiv papers...');
+    const arxivPapers = await getTopArXivPapers(5); // Get top 5 papers
+    
+    console.log(`📊 Found ${topStories.length} Hacker News stories, ${trendingRepos.length} GitHub repositories, and ${arxivPapers.length} ArXiv papers`);
     
     // Process each story to get basic info and summaries
     const stories: StoryInfo[] = [];
@@ -123,6 +138,20 @@ export const handler = async (
         }
       } catch (error) {
         console.log(`❌ Failed to process GitHub repo: ${repo.full_name}`, error);
+      }
+    }
+    
+    // Process ArXiv papers
+    for (const paper of arxivPapers) {
+      try {
+        const paperInfo = await processArXivPaper(paper);
+        stories.push(paperInfo);
+        console.log(`✅ Processed ArXiv: "${paperInfo.title}" (${paperInfo.author})`);
+        if (paperInfo.summary) {
+          console.log(`📝 Summary: ${paperInfo.summary}`);
+        }
+      } catch (error) {
+        console.log(`❌ Failed to process ArXiv paper: ${paper.title}`, error);
       }
     }
 
@@ -338,6 +367,81 @@ async function getTopGitHubTrending(limit: number = 2): Promise<GitHubRepository
   }
 }
 
+async function getTopArXivPapers(limit: number = 5): Promise<ArXivPaper[]> {
+  try {
+    console.log('📄 Fetching recent ArXiv papers...');
+    
+    // Query for recent papers in AI/ML and Computer Science categories
+    // Categories: cs.AI (Artificial Intelligence), cs.LG (Machine Learning), cs.CL (Computation and Language)
+    const categories = ['cs.AI', 'cs.LG', 'cs.CL', 'cs.CV'];
+    const query = categories.map(cat => `cat:${cat}`).join('+OR+');
+    
+    const apiUrl = `http://export.arxiv.org/api/query?search_query=${query}&sortBy=submittedDate&sortOrder=descending&max_results=${limit * 2}`;
+    
+    const response = await httpGet(apiUrl);
+    
+    // Parse XML response
+    const papers: ArXivPaper[] = [];
+    
+    // Simple XML parsing for entry elements
+    const entryMatches = response.match(/<entry>([\s\S]*?)<\/entry>/g);
+    
+    if (entryMatches && entryMatches.length > 0) {
+      for (const entryXml of entryMatches.slice(0, limit)) {
+        try {
+          // Extract fields from XML
+          const idMatch = entryXml.match(/<id>(.*?)<\/id>/);
+          const titleMatch = entryXml.match(/<title>([\s\S]*?)<\/title>/);
+          const summaryMatch = entryXml.match(/<summary>([\s\S]*?)<\/summary>/);
+          const publishedMatch = entryXml.match(/<published>(.*?)<\/published>/);
+          const updatedMatch = entryXml.match(/<updated>(.*?)<\/updated>/);
+          
+          // Extract authors
+          const authorMatches = entryXml.match(/<author>[\s\S]*?<name>(.*?)<\/name>[\s\S]*?<\/author>/g);
+          const authors = authorMatches ? authorMatches.map(a => {
+            const nameMatch = a.match(/<name>(.*?)<\/name>/);
+            return nameMatch ? nameMatch[1].trim() : '';
+          }).filter(a => a) : [];
+          
+          // Extract categories
+          const categoryMatches = entryXml.match(/<category term="(.*?)"/g);
+          const categories = categoryMatches ? categoryMatches.map(c => {
+            const match = c.match(/term="(.*?)"/);
+            return match ? match[1] : '';
+          }).filter(c => c) : [];
+          
+          const primaryCategoryMatch = entryXml.match(/<arxiv:primary_category.*?term="(.*?)"/);
+          
+          if (idMatch && titleMatch && summaryMatch && publishedMatch) {
+            papers.push({
+              id: idMatch[1].trim(),
+              title: titleMatch[1].trim().replace(/\s+/g, ' '),
+              summary: summaryMatch[1].trim().replace(/\s+/g, ' '),
+              authors: authors,
+              published: publishedMatch[1].trim(),
+              updated: updatedMatch ? updatedMatch[1].trim() : publishedMatch[1].trim(),
+              link: idMatch[1].trim(),
+              categories: categories,
+              primary_category: primaryCategoryMatch ? primaryCategoryMatch[1] : (categories[0] || 'cs.AI')
+            });
+          }
+        } catch (parseError) {
+          console.error('Failed to parse ArXiv entry:', parseError);
+        }
+      }
+      
+      console.log(`📄 Found ${papers.length} ArXiv papers`);
+      return papers;
+    } else {
+      console.log('📄 No ArXiv papers found');
+      return [];
+    }
+  } catch (error) {
+    console.error('Failed to fetch ArXiv papers:', error);
+    return [];
+  }
+}
+
 
 async function processStoryWithSummary(story: HackerNewsItem): Promise<StoryInfo> {
   const basicInfo: StoryInfo = {
@@ -394,6 +498,38 @@ async function processGitHubRepository(repo: GitHubRepository): Promise<StoryInf
   if (basicInfo.summary) {
     const audioUrl = await generateAudio(basicInfo.title, basicInfo.summary);
     basicInfo.audioUrl = audioUrl;
+  }
+
+  return basicInfo;
+}
+
+async function processArXivPaper(paper: ArXivPaper): Promise<StoryInfo> {
+  const basicInfo: StoryInfo = {
+    title: paper.title,
+    url: paper.link,
+    score: 0, // ArXiv doesn't have scores, we use 0
+    author: paper.authors.length > 0 ? paper.authors[0] + (paper.authors.length > 1 ? ' et al.' : '') : 'Unknown',
+    comments: 0, // ArXiv doesn't have comments
+    timestamp: paper.published,
+    source: 'arxiv'
+  };
+
+  // Use AI to summarize the paper's abstract
+  try {
+    const paperInfo = `${paper.title}\n\nAuthors: ${paper.authors.join(', ')}\n\nCategory: ${paper.primary_category}\n\nAbstract: ${paper.summary}`;
+    const summary = await summarizeWithBedrock(`ArXiv Paper: ${paper.title}`, paperInfo);
+    basicInfo.summary = summary;
+    
+    // Generate audio for the summary
+    if (summary && summary !== 'Summary unavailable') {
+      const audioUrl = await generateAudio(basicInfo.title, basicInfo.summary);
+      basicInfo.audioUrl = audioUrl;
+    }
+  } catch (error) {
+    console.error(`Failed to summarize ArXiv paper: ${paper.title}`, error);
+    // Fall back to a simple summary
+    const fallbackSummary = `## Summary\n\nThis research paper titled "${paper.title}" was published on ArXiv by ${paper.authors.slice(0, 3).join(', ')}${paper.authors.length > 3 ? ' and others' : ''}. It focuses on ${paper.primary_category.replace('cs.', '')}.\n\n${paper.summary.substring(0, 300)}...\n\n## Key Insight\n\nThis paper represents cutting-edge research in ${paper.primary_category}, contributing to the advancement of the field.`;
+    basicInfo.summary = fallbackSummary;
   }
 
   return basicInfo;
@@ -913,6 +1049,10 @@ function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): s
         sourceIcon = '⭐';
         sourceColor = '#24292e';
         sourceName = 'GitHub Trending';
+      } else if (story.source === 'arxiv') {
+        sourceIcon = '📄';
+        sourceColor = '#b31b1b';
+        sourceName = 'ArXiv Research';
       }
       
     storiesHTML += `
@@ -963,9 +1103,9 @@ function generateEmailHTML(newsletterData: NewsletterData, timestamp: string): s
         <title>Hacker News Summary</title>
     </head>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #ff6600, #24292e); color: white; border-radius: 8px;">
+        <div style="text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #ff6600, #24292e, #b31b1b); color: white; border-radius: 8px;">
             <h1 style="margin: 0;">🚀 Daily Tech Digest</h1>
-            <p style="margin: 10px 0 0 0;">Hacker News • GitHub Trending</p>
+            <p style="margin: 10px 0 0 0;">Hacker News • GitHub Trending • ArXiv Research</p>
             <p style="margin: 5px 0 0 0; font-size: 14px;">${date}</p>
         </div>
         
@@ -1016,6 +1156,8 @@ Listen to all ${newsletterData.stories.length} story summaries in one continuous
       sourceLabel = '📰 Hacker News';
     } else if (story.source === 'github-trending') {
       sourceLabel = '⭐ GitHub Trending';
+    } else if (story.source === 'arxiv') {
+      sourceLabel = '📄 ArXiv Research';
     }
     storiesText += `
 ${index + 1}. ${story.title} [${sourceLabel}]
@@ -1042,7 +1184,7 @@ ${cleanSummary}`;
 
   return `
 DAILY TECH DIGEST
-Hacker News • GitHub Trending
+Hacker News • GitHub Trending • ArXiv Research
 Generated by NewsAgent with AI Summaries
 ${date}
 

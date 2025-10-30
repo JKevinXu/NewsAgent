@@ -5,7 +5,7 @@ import { DynamoDBDocumentClient, QueryCommand, GetCommand, ScanCommand } from '@
 interface DailyRecommendation {
   id: string;
   date: string;
-  source: 'hacker-news' | 'github-trending';
+  source: 'hacker-news' | 'github-trending' | 'arxiv';
   title: string;
   url: string;
   score: number;
