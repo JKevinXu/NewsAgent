@@ -88,10 +88,10 @@ export const handler = async (
   try {
     // Fetch content from multiple sources
     console.log('📰 Fetching top stories from Hacker News...');
-    const topStories = await getTopHackerNewsStories(3); // Get top 3 stories
+    const topStories = await getTopHackerNewsStories(5); // Get top 5 stories
     
     console.log('⭐ Fetching trending GitHub repositories...');
-    const trendingRepos = await getTopGitHubTrending(3); // Get top 3 repos
+    const trendingRepos = await getTopGitHubTrending(5); // Get top 5 repos
     
     console.log(`📊 Found ${topStories.length} Hacker News stories and ${trendingRepos.length} GitHub repositories`);
     
