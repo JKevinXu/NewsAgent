@@ -376,7 +376,7 @@ async function getTopArXivPapers(limit: number = 5): Promise<ArXivPaper[]> {
     const categories = ['cs.AI', 'cs.LG', 'cs.CL', 'cs.CV'];
     const query = categories.map(cat => `cat:${cat}`).join('+OR+');
     
-    const apiUrl = `http://export.arxiv.org/api/query?search_query=${query}&sortBy=submittedDate&sortOrder=descending&max_results=${limit * 2}`;
+    const apiUrl = `https://export.arxiv.org/api/query?search_query=${query}&sortBy=submittedDate&sortOrder=descending&max_results=${limit * 2}`;
     
     const response = await httpGet(apiUrl);
     
