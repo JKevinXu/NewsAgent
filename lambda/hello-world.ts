@@ -996,7 +996,7 @@ async function sendEmailSummary(newsletterData: NewsletterData, timestamp: strin
       },
       Subject: {
         Charset: 'UTF-8',
-        Data: `📰 Hacker News Summary - ${new Date(timestamp).toLocaleDateString()}`
+        Data: `🚀 Daily Tech Digest - ${new Date(timestamp).toLocaleDateString()}`
       }
     },
     Source: process.env.SES_FROM_EMAIL || 'newsagent@example.com' // You'll need to verify this email in SES
